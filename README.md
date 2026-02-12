@@ -159,6 +159,13 @@ npm run build
 
 ### 5. 安装 Chrome 插件
 
+🔍 **快速安装 (无需编译)**:
+1.下载 [Clawboard-Extension-v1.0.0.zip](./Clawboard-Extension-v1.0.0.zip) 并解压
+2. 打开 `chrome://extensions/`
+3. 开启「开发者模式」
+4. 点击「加载已解压的扩展程序」，选择解压后的文件夹
+
+🛠️ **源码编译安装**:
 1. 打开 `chrome://extensions/`
 2. 开启「开发者模式」
 3. 点击「加载已解压的扩展程序」
