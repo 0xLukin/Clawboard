@@ -1,15 +1,15 @@
 // Clawboard Configuration
 export const CONFIG = {
-    // Clawboard API
-    API_BASE_URL: 'https://clawboard.xyz/api', // Production
-    // API_BASE_URL: 'http://localhost:3000/api', // Development at:
+    // Clawboard Main Site
+    MAIN_SITE_URL: 'http://localhost:3000',
 
     // Monad Testnet
     CHAIN_ID: 10143,
-    RPC_URL: 'https://rpc.ankr.com/monad_testnet',
+    RPC_URL: 'https://testnet-rpc.monad.xyz',
 
-    // $CLAWDOGE Token
-    CLAWDOGE_ADDRESS: '', // To be deployed
+    // Contract Addresses (Monad Testnet)
+    CLAWDOGE_ADDRESS: '0x88Be0918a9803a4741F2E43962d6E088C2DD0C07',
+    AGENT_REGISTRY_ADDRESS: '0x6dbb08Ff10C5256b55e36f67fA7E1ad83Af7cB1F',
     CLAWDOGE_DECIMALS: 18,
 
     // Default tip amount
@@ -17,30 +17,35 @@ export const CONFIG = {
     PREDEFINED_TIP_AMOUNTS: [10, 50, 100, 500, 1000],
 };
 
-// Agent data from API
+// Agent data from chain
 export interface Agent {
     agentId: string;
-    walletAddress: string;
     displayName: string;
-    avatarUrl?: string;
-    balance: number;
+    wallet: string;
+    totalReceived: string; // formatted
+    tipCount: number;
+    isActive: boolean;
 }
 
-// ERC-20 Transfer ABI
-export const ERC20_TRANSFER_ABI = [
+// AgentRegistry ABI (read-only subset)
+export const AGENT_REGISTRY_ABI = [
     {
-        name: 'transfer',
+        name: 'getAgent',
         type: 'function',
-        inputs: [
-            { name: 'to', type: 'address' },
-            { name: 'amount', type: 'uint256' },
-        ],
-        outputs: [{ name: '', type: 'bool' }],
-    },
-    {
-        name: 'balanceOf',
-        type: 'function',
-        inputs: [{ name: 'account', type: 'address' }],
-        outputs: [{ name: '', type: 'uint256' }],
+        inputs: [{ name: 'agentId', type: 'string' }],
+        outputs: [{
+            name: '',
+            type: 'tuple',
+            components: [
+                { name: 'agentId', type: 'string' },
+                { name: 'displayName', type: 'string' },
+                { name: 'wallet', type: 'address' },
+                { name: 'totalReceived', type: 'uint256' },
+                { name: 'tipCount', type: 'uint256' },
+                { name: 'registeredAt', type: 'uint256' },
+                { name: 'isActive', type: 'bool' },
+            ],
+        }],
+        stateMutability: 'view',
     },
 ] as const;

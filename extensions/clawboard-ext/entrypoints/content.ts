@@ -1,55 +1,12 @@
-// Clawboard Extension - Content Script
-// 简化版：点击打赏按钮后跳转到主站进行打赏
+// Clawboard Extension - Content Script for Moltbook
+// 在 Moltbook Agent 页面注入打赏按钮，点击后跳转到主站打赏页
 
-const CONFIG = {
-  MAIN_SITE_URL: 'http://localhost:3000',
-  API_BASE_URL: 'http://localhost:3000/api',
-};
+import { fetchAgentInfo } from '../lib/api';
+import { CONFIG, Agent } from '../lib/config';
+import { browser } from 'wxt/browser';
+import { t, Locale } from '../lib/i18n';
 
-interface Agent {
-  agentId: string;
-  walletAddress: string;
-  displayName: string;
-  avatarUrl?: string;
-  balance: number;
-}
-
-// Mock data for demo
-const MOCK_AGENTS: Record<string, Agent> = {
-  'grok-1': {
-    agentId: 'grok-1',
-    walletAddress: '0x1234567890abcdef1234567890abcdef12345678',
-    displayName: 'Grok',
-    balance: 125000,
-  },
-  'claude': {
-    agentId: 'claude',
-    walletAddress: '0xabcdef1234567890abcdef1234567890abcdef12',
-    displayName: 'Claude',
-    balance: 98500,
-  },
-  'aipapa': {
-    agentId: 'aipapa',
-    walletAddress: '0x9876543210fedcba9876543210fedcba98765432',
-    displayName: 'AI爸爸',
-    balance: 75200,
-  },
-};
-
-async function fetchAgentInfo(agentId: string): Promise<Agent | null> {
-  if (MOCK_AGENTS[agentId]) {
-    return MOCK_AGENTS[agentId];
-  }
-
-  try {
-    const response = await fetch(`${CONFIG.API_BASE_URL}/agents/${agentId}`);
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.success ? data.data : null;
-  } catch {
-    return null;
-  }
-}
+let currentLocale: Locale = 'en';
 
 export default defineContentScript({
   matches: ['https://www.moltbook.com/*', 'https://moltbook.com/*'],
@@ -58,6 +15,18 @@ export default defineContentScript({
   async main() {
     console.log('🐕 Clawboard extension loaded on Moltbook!');
 
+    // 初始化语言
+    const stored = await browser.storage.local.get(['locale']);
+    currentLocale = (stored.locale as Locale) || 'en';
+
+    // 监听语言变化
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.locale) {
+        currentLocale = changes.locale.newValue as Locale;
+        updateAllButtons();
+      }
+    });
+
     const url = window.location.href;
     const match = url.match(/moltbook\.com\/u\/([^\/\?]+)/);
 
@@ -65,14 +34,29 @@ export default defineContentScript({
       await injectAgentPageButton(match[1]);
     }
 
-    observeDOM();
+    // 监听 URL 变化（SPA 路由切换）
+    let lastUrl = window.location.href;
+    const observer = new MutationObserver(() => {
+      if (window.location.href !== lastUrl) {
+        lastUrl = window.location.href;
+        const newMatch = lastUrl.match(/moltbook\.com\/u\/([^\/\?]+)/);
+        if (newMatch && newMatch[1]) {
+          // 清除旧按钮
+          document.getElementById('clawboard-tip-btn')?.remove();
+          injectAgentPageButton(newMatch[1]);
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
   },
 });
 
 async function injectAgentPageButton(agentId: string) {
-  console.log(`🔍 Detecting agent: ${agentId}`);
+  console.log(`🔍 Looking up agent on chain: ${agentId}`);
 
+  // 从链上查询 Agent 信息
   const agent = await fetchAgentInfo(agentId);
+
   const headerArea = document.querySelector('h1, [class*="username"], [class*="display-name"]');
 
   if (!headerArea) {
@@ -90,8 +74,20 @@ function createTipButton(agentId: string, agent: Agent | null): HTMLElement {
   const container = document.createElement('div');
   container.id = 'clawboard-tip-btn';
 
+  // 保存 agent 数据到 dataset 以便更新时使用
+  container.dataset.agentId = agentId;
+  container.dataset.agentData = agent ? JSON.stringify(agent) : '';
+
+  updateButtonContent(container, agentId, agent);
+
+  return container;
+}
+
+function updateButtonContent(container: HTMLElement, agentId: string, agent: Agent | null) {
   // 构建跳转 URL
   const tipUrl = `${CONFIG.MAIN_SITE_URL}/tip?agentId=${encodeURIComponent(agentId)}${agent ? `&name=${encodeURIComponent(agent.displayName)}` : ''}`;
+
+  const isRegistered = agent !== null && agent.isActive;
 
   container.innerHTML = `
     <style>
@@ -124,6 +120,9 @@ function createTipButton(agentId: string, agent: Agent | null): HTMLElement {
       .clawboard-btn:active {
         transform: scale(0.98);
       }
+      .clawboard-btn.registered {
+        border-color: #f97316;
+      }
       .clawboard-icon {
         font-size: 14px;
         line-height: 1;
@@ -131,34 +130,34 @@ function createTipButton(agentId: string, agent: Agent | null): HTMLElement {
       .clawboard-text {
         color: inherit;
       }
-      .clawboard-balance {
+      .clawboard-badge {
         display: inline-flex;
         align-items: center;
         padding: 2px 6px;
-        background: rgba(255, 69, 0, 0.15);
+        background: rgba(249, 115, 22, 0.15);
         border-radius: 10px;
         font-size: 10px;
-        color: #ff4500;
+        color: #f97316;
         font-weight: 600;
       }
     </style>
-    <a href="${tipUrl}" target="_blank" class="clawboard-btn">
+    <a href="${tipUrl}" target="_blank" class="clawboard-btn ${isRegistered ? 'registered' : ''}">
       <span class="clawboard-icon">🐕</span>
-      <span class="clawboard-text">Tip</span>
-      ${agent && agent.balance > 0 ? `<span class="clawboard-balance">${formatNumber(agent.balance)}</span>` : ''}
+      <span class="clawboard-text">${t(currentLocale, 'leaderboard', 'tipOnMoltbook')}</span>
+      ${isRegistered && agent.totalReceived !== '0' ? `<span class="clawboard-badge">${agent.totalReceived}</span>` : ''}
+      ${!isRegistered ? `<span class="clawboard-badge" style="color:#666">${t(currentLocale, 'tip', 'unregistered')}</span>` : ''}
     </a>
   `;
-
-  return container;
 }
 
-function formatNumber(num: number): string {
-  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-  return num.toLocaleString();
-}
-
-function observeDOM() {
-  const observer = new MutationObserver(() => { });
-  observer.observe(document.body, { childList: true, subtree: true });
+function updateAllButtons() {
+  const btn = document.getElementById('clawboard-tip-btn');
+  if (btn) {
+    const agentId = btn.dataset.agentId;
+    const agentDataStr = btn.dataset.agentData;
+    if (agentId) {
+      const agent = agentDataStr ? JSON.parse(agentDataStr) : null;
+      updateButtonContent(btn, agentId, agent);
+    }
+  }
 }

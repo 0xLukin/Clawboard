@@ -1,18 +1,31 @@
 'use client';
 
-import { useAccount, useConnect, useDisconnect, useBalance } from 'wagmi';
-import { useState } from 'react';
-import { Wallet, LogOut, ChevronDown, Copy, Check } from 'lucide-react';
+import { useAccount, useConnect, useDisconnect, useBalance, useSwitchChain, useChainId } from 'wagmi';
+import { useState, useEffect } from 'react';
+import { Wallet, LogOut, ChevronDown, Copy, Check, AlertTriangle } from 'lucide-react';
+import { monadTestnet } from '@/lib/web3';
+import { useLanguage } from '@/components/providers/LanguageProvider';
 
 export function ConnectWalletButton() {
+    const { t } = useLanguage();
     const { address, isConnected } = useAccount();
+    const chainId = useChainId();
     const { connect, connectors, isPending } = useConnect();
     const { disconnect } = useDisconnect();
+    const { switchChain } = useSwitchChain();
     const { data: balance } = useBalance({ address });
 
     const [showDropdown, setShowDropdown] = useState(false);
     const [showWalletList, setShowWalletList] = useState(false);
     const [copied, setCopied] = useState(false);
+
+    const isWrongChain = isConnected && chainId !== monadTestnet.id;
+
+    useEffect(() => {
+        if (isConnected && isWrongChain && switchChain) {
+            switchChain({ chainId: monadTestnet.id });
+        }
+    }, [isConnected, isWrongChain, switchChain]);
 
     const copyAddress = () => {
         if (address) {
@@ -25,6 +38,26 @@ export function ConnectWalletButton() {
     const formatAddress = (addr: string) => {
         return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
     };
+
+    const handleConnect = (connector: typeof connectors[number]) => {
+        connect({ connector, chainId: monadTestnet.id });
+        setShowWalletList(false);
+    };
+
+    // Wrong network
+    if (isConnected && isWrongChain) {
+        return (
+            <button
+                onClick={() => switchChain({ chainId: monadTestnet.id })}
+                className="flex items-center gap-2 px-4 py-2.5 bg-red-500/20 border border-red-500/50
+                 hover:bg-red-500/30 text-red-400 font-semibold rounded-xl 
+                 transition-all duration-200 animate-pulse"
+            >
+                <AlertTriangle className="w-4 h-4" />
+                <span>{t('common', 'switchToMonad')}</span>
+            </button>
+        );
+    }
 
     if (isConnected && address) {
         return (
@@ -44,9 +77,12 @@ export function ConnectWalletButton() {
                     <div className="absolute right-0 mt-2 w-64 bg-zinc-900 border border-zinc-700 rounded-xl 
                           shadow-xl overflow-hidden z-50">
                         <div className="p-4 border-b border-zinc-700">
-                            <p className="text-sm text-zinc-400 mb-1">余额</p>
+                            <div className="flex items-center justify-between mb-1">
+                                <p className="text-sm text-zinc-400">{t('common', 'balance')}</p>
+                                <span className="text-xs text-green-400 bg-green-400/10 px-2 py-0.5 rounded-full">Monad Testnet</span>
+                            </div>
                             <p className="text-lg font-bold text-white">
-                                {balance ? `${(Number(balance.value) / 10 ** balance.decimals).toFixed(4)} ${balance.symbol}` : '加载中...'}
+                                {balance ? `${(Number(balance.value) / 10 ** balance.decimals).toFixed(4)} ${balance.symbol}` : t('common', 'loading')}
                             </p>
                         </div>
                         <div className="p-2">
@@ -56,7 +92,7 @@ export function ConnectWalletButton() {
                            rounded-lg transition-colors text-left"
                             >
                                 {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-                                <span>{copied ? '已复制!' : '复制地址'}</span>
+                                <span>{copied ? t('common', 'copied') : t('common', 'copyAddress')}</span>
                             </button>
                             <button
                                 onClick={() => {
@@ -67,7 +103,7 @@ export function ConnectWalletButton() {
                            rounded-lg transition-colors text-left"
                             >
                                 <LogOut className="w-4 h-4" />
-                                <span>断开连接</span>
+                                <span>{t('common', 'disconnect')}</span>
                             </button>
                         </div>
                     </div>
@@ -87,7 +123,7 @@ export function ConnectWalletButton() {
                  disabled:cursor-not-allowed"
             >
                 <Wallet className="w-5 h-5" />
-                {isPending ? '连接中...' : '连接钱包'}
+                {isPending ? t('common', 'connecting') : t('common', 'connectWallet')}
                 <ChevronDown className={`w-4 h-4 transition-transform ${showWalletList ? 'rotate-180' : ''}`} />
             </button>
 
@@ -95,14 +131,11 @@ export function ConnectWalletButton() {
                 <div className="absolute right-0 mt-2 w-56 bg-zinc-900 border border-zinc-700 rounded-xl 
                       shadow-xl overflow-hidden z-50">
                     <div className="p-2">
-                        <p className="px-3 py-2 text-xs text-zinc-500 uppercase tracking-wide">选择钱包</p>
+                        <p className="px-3 py-2 text-xs text-zinc-500 uppercase tracking-wide">{t('common', 'selectWallet')}</p>
                         {connectors.map((connector) => (
                             <button
                                 key={connector.uid}
-                                onClick={() => {
-                                    connect({ connector });
-                                    setShowWalletList(false);
-                                }}
+                                onClick={() => handleConnect(connector)}
                                 className="w-full flex items-center gap-3 px-3 py-2.5 text-zinc-300 
                                  hover:bg-zinc-800 rounded-lg transition-colors text-left"
                             >
@@ -118,4 +151,3 @@ export function ConnectWalletButton() {
         </div>
     );
 }
-

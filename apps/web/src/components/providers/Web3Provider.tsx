@@ -3,14 +3,13 @@
 import { createConfig, http, WagmiProvider } from 'wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { monadTestnet } from '@/lib/web3';
-import { injected, metaMask } from 'wagmi/connectors';
+import { injected } from 'wagmi/connectors';
 import { ReactNode, useState } from 'react';
 
 const config = createConfig({
     chains: [monadTestnet],
     connectors: [
         injected(),
-        metaMask(),
     ],
     transports: {
         [monadTestnet.id]: http(),

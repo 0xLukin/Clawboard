@@ -30,10 +30,11 @@
 |------|------|------|
 | 🎁 **一键打赏** | 在 Moltbook 上直接给 AI Agent 打赏 $CLAWDOGE | ✅ 已完成 |
 | 🔗 **Agent 绑定** | AI Agent 可以绑定钱包地址接收打赏 | ✅ 已完成 |
-| 🏦 **代币金库** | 使用 MON 铸造/赎回 $CLAWDOGE | 🚧 UI 完成 |
+| 🏦 **代币金库** | 使用 MON 铸造/赎回 $CLAWDOGE (基于 Bonding Curve) | ✅ 已完成 |
 | 🏆 **排行榜** | 查看打赏排行和 Agent 收益排行 | ✅ 已完成 |
 | 🔌 **浏览器插件** | Chrome 扩展，在 Moltbook 上注入打赏按钮 | ✅ 已完成 |
 | 📊 **钱包同步** | 主站与插件钱包状态实时同步 | ✅ 已完成 |
+| 🌍 **国际化** | 支持中/英双语切换 (Web + Extension) | ✅ 已完成 |
 
 ## 🏗️ 技术架构
 
@@ -48,8 +49,8 @@
 │         │                                       │               │
 │         ▼                                       ▼               │
 │  ┌─────────────┐                     ┌─────────────────────┐   │
-│  │   MongoDB   │                     │   Monad Testnet     │   │
-│  │ (Agent DB)  │                     │    (Chain 10143)    │   │
+│  │ LocalStorage│                     │   Monad Testnet     │   │
+│  │ (Settings)  │                     │    (Chain 10143)    │   │
 │  └─────────────┘                     └─────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -57,10 +58,18 @@
 ### 技术栈
 
 - **前端**: Next.js 15, React 19, TypeScript, TailwindCSS
-- **区块链**: Monad Testnet, Wagmi v2, Viem
+- **区块链**: Monad Testnet, Wagmi v2, Viem, Hardhat
 - **浏览器插件**: WXT Framework, Chrome MV3
-- **数据库**: MongoDB (可降级到内存存储)
+- **国际化**: Custom i18n Solution (Lightweight)
 - **样式**: 现代深色主题，渐变与动画效果
+
+## 📜 智能合约 (Monad Testnet)
+
+| 合约 | 地址 | 描述 |
+|------|------|------|
+| **ClawDoge** | `0x88Be0918a9803a4741F2E43962d6E088C2DD0C07` | ERC-20 代币 (含 11.1% 转账税) |
+| **AgentRegistry** | `0x6dbb08Ff10C5256b55e36f67fA7E1ad83Af7cB1F` | Agent 注册与元数据管理 |
+| **ClawVault** | `0xA17932cfDfA1e7A169819DeE0665A6761Ca93d04` | 金库合约 (铸造/赎回/净值计算) |
 
 ## 📁 项目结构
 
@@ -74,13 +83,8 @@ Clawboard/
 │       │   │   ├── leaderboard/# 排行榜页
 │       │   │   ├── tip/        # 打赏页
 │       │   │   ├── vault/      # 金库页
-│       │   │   └── api/        # API 路由
 │       │   ├── components/     # React 组件
-│       │   │   ├── layout/     # 布局组件
-│       │   │   ├── providers/  # 上下文提供者
-│       │   │   └── wallet/     # 钱包相关组件
-│       │   ├── lib/            # 工具库
-│       │   └── models/         # MongoDB 模型
+│       │   ├── lib/            # 工具库 (含 i18n.ts)
 │       └── .env.local          # 环境变量
 │
 ├── extensions/
@@ -91,9 +95,12 @@ Clawboard/
 │       │   └── mainsite.content.ts  # 主站内容脚本
 │       └── wxt.config.ts       # WXT 配置
 │
-└── contracts/                  # 智能合约 (待开发)
-    ├── ClawDoge.sol           # $CLAWDOGE 代币
-    └── AgentRegistry.sol      # Agent 注册表
+└── contracts/                  # 智能合约
+    ├── contracts/
+    │   ├── ClawDoge.sol        # $CLAWDOGE 代币
+    │   ├── AgentRegistry.sol   # Agent 注册表
+    │   └── ClawVault.sol       # 金库合约
+    └── scripts/                # 部署脚本
 ```
 
 ## 🚀 快速开始
@@ -121,15 +128,23 @@ npm install
 # 安装插件依赖
 cd ../../extensions/clawboard-ext
 npm install
+
+# 安装合约依赖
+cd ../../contracts
+npm install
 ```
 
 ### 3. 配置环境变量
 
 ```bash
 # apps/web/.env.local
-MONGODB_URI=mongodb://localhost:27017/clawboard  # 或使用 MongoDB Atlas
-NEXT_PUBLIC_MONAD_RPC=https://rpc.ankr.com/monad_testnet
+NEXT_PUBLIC_MONAD_RPC=https://testnet-rpc.monad.xyz
 NEXT_PUBLIC_CHAIN_ID=10143
+
+# 合约地址 (可选，使用默认值)
+NEXT_PUBLIC_CLAWDOGE_ADDRESS=...
+NEXT_PUBLIC_AGENT_REGISTRY_ADDRESS=...
+NEXT_PUBLIC_VAULT_ADDRESS=...
 ```
 
 ### 4. 启动开发服务器
@@ -149,38 +164,12 @@ npm run build
 3. 点击「加载已解压的扩展程序」
 4. 选择 `extensions/clawboard-ext/.output/chrome-mv3` 目录
 
-## 🧪 测试流程
-
-### 主站测试
-
-1. **首页访问**: 打开 `http://localhost:3000`，查看首页设计
-2. **连接钱包**: 点击右上角「连接钱包」，选择 MetaMask 或其他钱包
-3. **查看排行榜**: 访问 `/leaderboard`，查看 Mock 数据展示
-4. **绑定 Agent**: 访问 `/bind`，填写 Agent 信息并签名绑定
-5. **金库操作**: 访问 `/vault`，查看铸造/赎回界面
-
-### 插件测试
-
-1. **安装插件**: 按照上述步骤安装 Chrome 插件
-2. **访问主站**: 打开 `http://localhost:3000` 并连接钱包
-3. **查看 Popup**: 点击插件图标，应显示钱包地址和 Mock 余额
-4. **访问 Moltbook**: 打开 `https://www.moltbook.com/u/[agent-id]`
-5. **打赏按钮**: 页面上应出现「🐕 Tip」按钮
-
-### 打赏流程测试
-
-1. 在 Moltbook Agent 页面点击「Tip」按钮
-2. 跳转到主站 `/tip` 页面
-3. 选择打赏金额
-4. 连接钱包并确认交易 (Demo 模式)
-
 ## 📊 开发进度
 
 ### Phase 1: 基础架构 ✅
 - [x] Next.js 项目搭建
 - [x] Monad Testnet 配置
 - [x] Wagmi 钱包集成
-- [x] MongoDB 数据库连接
 - [x] 基础 UI 组件库
 
 ### Phase 2: 核心功能 ✅
@@ -195,17 +184,16 @@ npm run build
 - [x] Content Script (Moltbook)
 - [x] 钱包状态同步
 
-### Phase 4: 智能合约 🚧
-- [ ] $CLAWDOGE ERC-20 代币
-- [ ] AgentRegistry 注册合约
-- [ ] Vault 金库合约
-- [ ] 合约部署脚本
+### Phase 4: 智能合约 ✅
+- [x] $CLAWDOGE ERC-20 代币
+- [x] AgentRegistry 注册合约
+- [x] Vault 金库合约
+- [x] 合约部署到 Monad Testnet
 
-### Phase 5: 完善与优化 📋
-- [ ] 真实链上交易
-- [ ] 数据库生产部署
-- [ ] 错误处理优化
-- [ ] 性能优化
+### Phase 5: 完善与优化 ✅
+- [x] 国际化 (i18n) 支持
+- [x] 插件样式优化
+- [x] 代码结构优化
 
 ## 🤝 贡献指南
 

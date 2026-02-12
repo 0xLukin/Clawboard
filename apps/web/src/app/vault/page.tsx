@@ -1,277 +1,319 @@
 'use client';
 
-import { useState } from 'react';
-import { useAccount, useBalance } from 'wagmi';
-import { Vault, TrendingUp, TrendingDown, Info, ArrowRight, Coins } from 'lucide-react';
-import { CLAWDOGE_TOKEN } from '@/lib/web3';
-
-// Mock vault data
-const VAULT_DATA = {
-    totalSupply: 500_000_000,
-    maxSupply: 2_100_000_000,
-    totalUSDC: 2_500_000,
-    netValue: 0.005, // USDC per CLAWDOGE
-    burned: 50_000_000,
-    teamAllocation: 21_000_000,
-};
+import { useState, useEffect } from 'react';
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { parseEther, formatEther } from 'viem';
+import { Vault, TrendingUp, TrendingDown, Info, Coins } from 'lucide-react';
+import { CONTRACT_ADDRESSES, CLAWDOGE_TOKEN } from '@/lib/web3';
+import { CLAWDOGE_ABI, VAULT_ABI } from '@/lib/abis';
+import { useLanguage } from '@/components/providers/LanguageProvider';
 
 export default function VaultPage() {
+    const { t } = useLanguage();
     const { address, isConnected } = useAccount();
-    const { data: balance } = useBalance({ address });
-
     const [activeTab, setActiveTab] = useState<'mint' | 'redeem'>('mint');
     const [amount, setAmount] = useState('');
-    const [loading, setLoading] = useState(false);
 
-    // Mock user CLAWDOGE balance
-    const userClawdogeBalance = 10000;
+    // 读取金库信息
+    const { data: vaultInfo, refetch: refetchVaultInfo } = useReadContract({
+        address: CONTRACT_ADDRESSES.VAULT as `0x${string}`,
+        abi: VAULT_ABI,
+        functionName: 'getVaultInfo',
+    });
 
-    const calculateOutput = () => {
-        const inputAmount = parseFloat(amount) || 0;
-        if (activeTab === 'mint') {
-            // USDC to CLAWDOGE
-            return inputAmount / VAULT_DATA.netValue;
-        } else {
-            // CLAWDOGE to USDC (with tax)
-            const afterTax = inputAmount * (1 - CLAWDOGE_TOKEN.transferTax);
-            return afterTax * VAULT_DATA.netValue;
+    // 读取用户 CLAWDOGE 余额
+    const { data: userBalance, refetch: refetchBalance } = useReadContract({
+        address: CONTRACT_ADDRESSES.CLAWDOGE as `0x${string}`,
+        abi: CLAWDOGE_ABI,
+        functionName: 'balanceOf',
+        args: address ? [address] : undefined,
+    });
+
+    // 计算铸造输出
+    const { data: mintOutput } = useReadContract({
+        address: CONTRACT_ADDRESSES.VAULT as `0x${string}`,
+        abi: VAULT_ABI,
+        functionName: 'calculateMintOutput',
+        args: amount ? [parseEther(amount)] : undefined,
+    });
+
+    // 计算赎回输出
+    const { data: redeemOutput } = useReadContract({
+        address: CONTRACT_ADDRESSES.VAULT as `0x${string}`,
+        abi: VAULT_ABI,
+        functionName: 'calculateRedeemOutput',
+        args: amount ? [parseEther(amount)] : undefined,
+    });
+
+    // 读取 Allowance
+    const { data: allowance, refetch: refetchAllowance } = useReadContract({
+        address: CONTRACT_ADDRESSES.CLAWDOGE as `0x${string}`,
+        abi: CLAWDOGE_ABI,
+        functionName: 'allowance',
+        args: address ? [address, CONTRACT_ADDRESSES.VAULT as `0x${string}`] : undefined,
+    });
+
+    // Mint 交易
+    const { writeContract: writeMint, data: mintHash, isPending: isMintPending } = useWriteContract();
+    const { isLoading: isMintConfirming, isSuccess: isMintSuccess } = useWaitForTransactionReceipt({ hash: mintHash });
+
+    // Approve 交易
+    const { writeContract: writeApprove, data: approveHash, isPending: isApprovePending } = useWriteContract();
+    const { isLoading: isApproveConfirming, isSuccess: isApproveSuccess } = useWaitForTransactionReceipt({ hash: approveHash });
+
+    // Redeem 交易
+    const { writeContract: writeRedeem, data: redeemHash, isPending: isRedeemPending } = useWriteContract();
+    const { isLoading: isRedeemConfirming, isSuccess: isRedeemSuccess } = useWaitForTransactionReceipt({ hash: redeemHash });
+
+    // Approve 成功后自动发起 Redeem
+    useEffect(() => {
+        if (isApproveSuccess && amount && activeTab === 'redeem') {
+            refetchAllowance();
+            writeRedeem({
+                address: CONTRACT_ADDRESSES.VAULT as `0x${string}`,
+                abi: VAULT_ABI,
+                functionName: 'redeem',
+                args: [parseEther(amount)],
+            });
         }
-    };
+    }, [isApproveSuccess]);
 
-    const handleTransaction = async () => {
+    // 交易成功后刷新
+    useEffect(() => {
+        if (isMintSuccess || isRedeemSuccess) {
+            refetchVaultInfo();
+            refetchBalance();
+            refetchAllowance();
+            setAmount('');
+        }
+    }, [isMintSuccess, isRedeemSuccess]);
+
+    const handleMint = () => {
         if (!amount || !isConnected) return;
-
-        setLoading(true);
-        // Simulate transaction
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        setLoading(false);
-        setAmount('');
-        alert(`Demo: ${activeTab === 'mint' ? 'Mint' : 'Redeem'} 交易已提交!`);
+        writeMint({
+            address: CONTRACT_ADDRESSES.VAULT as `0x${string}`,
+            abi: VAULT_ABI,
+            functionName: 'mint',
+            value: parseEther(amount),
+        });
     };
 
-    const formatNumber = (num: number, decimals = 2) => {
-        if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(decimals)}B`;
-        if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(decimals)}M`;
-        if (num >= 1_000) return `${(num / 1_000).toFixed(decimals)}K`;
-        return num.toLocaleString();
+    const handleRedeem = () => {
+        if (!amount || !isConnected) return;
+        const redeemAmount = parseEther(amount);
+
+        if (!allowance || (allowance as bigint) < redeemAmount) {
+            writeApprove({
+                address: CONTRACT_ADDRESSES.CLAWDOGE as `0x${string}`,
+                abi: CLAWDOGE_ABI,
+                functionName: 'approve',
+                args: [CONTRACT_ADDRESSES.VAULT as `0x${string}`, BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')],
+            });
+            return;
+        }
+
+        writeRedeem({
+            address: CONTRACT_ADDRESSES.VAULT as `0x${string}`,
+            abi: VAULT_ABI,
+            functionName: 'redeem',
+            args: [redeemAmount],
+        });
     };
+
+    const formatNum = (val: bigint | undefined) => {
+        if (!val) return '0';
+        const num = Number(formatEther(val));
+        if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+        if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+        return num.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    };
+
+    const vaultBalance = vaultInfo ? (vaultInfo as readonly bigint[])[0] : undefined;
+    const circulatingSupply = vaultInfo ? (vaultInfo as readonly bigint[])[1] : undefined;
+    const maxSupply = vaultInfo ? (vaultInfo as readonly bigint[])[2] : undefined;
+    const burned = vaultInfo ? (vaultInfo as readonly bigint[])[3] : undefined;
+    const netValue = vaultInfo ? (vaultInfo as readonly bigint[])[4] : undefined;
+
+    const loading = isMintPending || isMintConfirming || isApprovePending || isApproveConfirming || isRedeemPending || isRedeemConfirming;
+    const needsApproval = activeTab === 'redeem' && amount && allowance !== undefined &&
+        (allowance as bigint) < (amount ? parseEther(amount) : BigInt(0));
+
+    const statusText = isMintPending ? t('vault', 'confirmMint')
+        : isMintConfirming ? t('vault', 'mintConfirming')
+            : isApprovePending ? t('vault', 'confirmApproval')
+                : isApproveConfirming ? t('vault', 'approvalConfirming')
+                    : isRedeemPending ? t('vault', 'confirmRedeem')
+                        : isRedeemConfirming ? t('vault', 'redeemConfirming')
+                            : '';
 
     return (
         <div className="min-h-screen bg-black py-8">
-            <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
                 {/* Header */}
                 <div className="mb-8">
                     <div className="flex items-center gap-3 mb-4">
                         <Vault className="w-8 h-8 text-yellow-400" />
-                        <h1 className="text-3xl font-bold text-white">金库</h1>
+                        <h1 className="text-3xl font-bold text-white">{t('vault', 'title')}</h1>
                     </div>
-                    <p className="text-zinc-400">
-                        购买或赎回 $CLAWDOGE，参与 Agent 经济
-                    </p>
+                    <p className="text-zinc-400">{t('vault', 'subtitle')}</p>
                 </div>
 
                 {/* Vault Stats */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-xl">
-                        <p className="text-zinc-500 text-sm mb-1">金库净值</p>
-                        <p className="text-2xl font-bold text-white">${VAULT_DATA.netValue.toFixed(4)}</p>
-                        <p className="text-xs text-zinc-500">per $CLAWDOGE</p>
+                        <p className="text-zinc-500 text-sm">{t('vault', 'vaultBalance')}</p>
+                        <p className="text-xl font-bold text-white">{formatNum(vaultBalance)} <span className="text-sm text-zinc-400">MON</span></p>
                     </div>
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-xl">
-                        <p className="text-zinc-500 text-sm mb-1">总供应量</p>
-                        <p className="text-2xl font-bold text-orange-400">{formatNumber(VAULT_DATA.totalSupply)}</p>
-                        <p className="text-xs text-zinc-500">/ {formatNumber(VAULT_DATA.maxSupply)} max</p>
+                        <p className="text-zinc-500 text-sm">{t('vault', 'circulatingSupply')}</p>
+                        <p className="text-xl font-bold text-orange-400">{formatNum(circulatingSupply)}</p>
                     </div>
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-xl">
-                        <p className="text-zinc-500 text-sm mb-1">金库 USDC</p>
-                        <p className="text-2xl font-bold text-green-400">${formatNumber(VAULT_DATA.totalUSDC)}</p>
-                        <p className="text-xs text-zinc-500">抵押物</p>
+                        <p className="text-zinc-500 text-sm">{t('vault', 'netValue')}</p>
+                        <p className="text-xl font-bold text-green-400">
+                            {netValue ? `${Number(formatEther(netValue)).toFixed(6)}` : '--'} <span className="text-sm text-zinc-400">MON</span>
+                        </p>
                     </div>
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-xl">
-                        <p className="text-zinc-500 text-sm mb-1">已销毁</p>
-                        <p className="text-2xl font-bold text-red-400">{formatNumber(VAULT_DATA.burned)}</p>
-                        <p className="text-xs text-zinc-500">$CLAWDOGE</p>
+                        <p className="text-zinc-500 text-sm">{t('vault', 'totalBurned')}</p>
+                        <p className="text-xl font-bold text-red-400">{formatNum(burned)}</p>
                     </div>
                 </div>
 
-                <div className="grid lg:grid-cols-2 gap-8">
-                    {/* Swap Card */}
-                    <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-                        {/* Tabs */}
-                        <div className="flex gap-2 mb-6">
-                            <button
-                                onClick={() => setActiveTab('mint')}
-                                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold 
-                            transition-all ${activeTab === 'mint'
-                                        ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                                        : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                                    }`}
-                            >
-                                <TrendingUp className="w-5 h-5" />
-                                铸造 Mint
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('redeem')}
-                                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold 
-                            transition-all ${activeTab === 'redeem'
-                                        ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                        : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                                    }`}
-                            >
-                                <TrendingDown className="w-5 h-5" />
-                                赎回 Redeem
-                            </button>
-                        </div>
-
-                        {!isConnected ? (
-                            <div className="text-center py-8">
-                                <p className="text-zinc-400">请先在右上角连接钱包</p>
-                            </div>
-                        ) : (
-                            <>
-                                {/* Input */}
-                                <div className="mb-4">
-                                    <div className="flex justify-between text-sm mb-2">
-                                        <span className="text-zinc-500">
-                                            {activeTab === 'mint' ? '支付' : '赎回'}
-                                        </span>
-                                        <span className="text-zinc-500">
-                                            余额: {activeTab === 'mint'
-                                                ? `${balance ? (Number(balance.value) / 10 ** balance.decimals).toFixed(4) : '0'} ${balance?.symbol || 'MON'}`
-                                                : `${formatNumber(userClawdogeBalance)} $CLAWDOGE`
-                                            }
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-3 p-4 bg-zinc-800 rounded-xl">
-                                        <input
-                                            type="number"
-                                            value={amount}
-                                            onChange={(e) => setAmount(e.target.value)}
-                                            placeholder="0.00"
-                                            className="flex-1 bg-transparent text-2xl font-bold text-white outline-none"
-                                        />
-                                        <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-700 rounded-lg">
-                                            <Coins className="w-5 h-5 text-yellow-400" />
-                                            <span className="font-medium text-white">
-                                                {activeTab === 'mint' ? 'USDC' : '$CLAWDOGE'}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Arrow */}
-                                <div className="flex justify-center my-2">
-                                    <div className="w-10 h-10 bg-zinc-800 rounded-full flex items-center justify-center">
-                                        <ArrowRight className="w-5 h-5 text-zinc-400 rotate-90" />
-                                    </div>
-                                </div>
-
-                                {/* Output */}
-                                <div className="mb-6">
-                                    <div className="flex justify-between text-sm mb-2">
-                                        <span className="text-zinc-500">获得</span>
-                                        <span className="text-zinc-500">
-                                            {activeTab === 'redeem' && '(扣除 11.1% 税后)'}
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-3 p-4 bg-zinc-800/50 rounded-xl">
-                                        <span className="flex-1 text-2xl font-bold text-white">
-                                            {amount ? formatNumber(calculateOutput(), 4) : '0.00'}
-                                        </span>
-                                        <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-700 rounded-lg">
-                                            <Coins className="w-5 h-5 text-orange-400" />
-                                            <span className="font-medium text-white">
-                                                {activeTab === 'mint' ? '$CLAWDOGE' : 'USDC'}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Tax Info */}
-                                {activeTab === 'redeem' && (
-                                    <div className="flex items-start gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 
-                                  rounded-lg mb-6">
-                                        <Info className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
-                                        <p className="text-sm text-yellow-200">
-                                            赎回将收取 11.1% 转账税（4.2% 团队 + 6.9% 销毁）
-                                        </p>
-                                    </div>
-                                )}
-
-                                {/* Submit Button */}
-                                <button
-                                    onClick={handleTransaction}
-                                    disabled={!amount || loading}
-                                    className={`w-full py-4 rounded-xl font-bold text-lg transition-all disabled:opacity-50 
-                              disabled:cursor-not-allowed ${activeTab === 'mint'
-                                            ? 'bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white'
-                                            : 'bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white'
-                                        }`}
-                                >
-                                    {loading ? '处理中...' : activeTab === 'mint' ? '铸造 $CLAWDOGE' : '赎回 USDC'}
-                                </button>
-                            </>
-                        )}
-                    </div>
-
-                    {/* Info Panel */}
-                    <div className="space-y-6">
-                        {/* Your Holdings */}
-                        <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">你的持仓</h3>
-                            {isConnected ? (
-                                <div className="space-y-4">
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-zinc-400">$CLAWDOGE 余额</span>
-                                        <span className="text-xl font-bold text-orange-400">
-                                            {formatNumber(userClawdogeBalance)}
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-zinc-400">估值 (USDC)</span>
-                                        <span className="text-xl font-bold text-green-400">
-                                            ${(userClawdogeBalance * VAULT_DATA.netValue).toFixed(2)}
-                                        </span>
-                                    </div>
-                                    <div className="h-px bg-zinc-800" />
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-zinc-400">占总供应</span>
-                                        <span className="text-white">
-                                            {((userClawdogeBalance / VAULT_DATA.totalSupply) * 100).toFixed(4)}%
-                                        </span>
-                                    </div>
-                                </div>
-                            ) : (
-                                <p className="text-zinc-500 text-center py-4">连接钱包查看持仓</p>
-                            )}
-                        </div>
-
-                        {/* Token Mechanics */}
-                        <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">代币机制</h3>
-                            <div className="space-y-3 text-sm">
-                                <div className="flex justify-between">
-                                    <span className="text-zinc-400">最大供应量</span>
-                                    <span className="text-white">21 亿</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-zinc-400">转账税</span>
-                                    <span className="text-white">11.1%</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-zinc-400">├ 团队分配</span>
-                                    <span className="text-orange-400">4.2%</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-zinc-400">└ 销毁</span>
-                                    <span className="text-red-400">6.9%</span>
-                                </div>
-                                <div className="h-px bg-zinc-800" />
-                                <p className="text-zinc-500">
-                                    每次打赏或转账都会增加金库净值，形成正向飞轮效应。
+                {/* User Balance */}
+                {isConnected && (
+                    <div className="p-4 bg-gradient-to-r from-orange-500/10 to-yellow-500/10 border border-orange-500/20 rounded-xl mb-8">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-sm text-zinc-400">{t('common', 'balance')} $CLAWDOGE</p>
+                                <p className="text-2xl font-bold text-orange-400">
+                                    {userBalance ? formatNum(userBalance as bigint) : '0'}
                                 </p>
                             </div>
+                            <Coins className="w-8 h-8 text-orange-400/50" />
                         </div>
+                    </div>
+                )}
+
+                {/* Mint / Redeem Tabs */}
+                <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden">
+                    <div className="flex border-b border-zinc-800">
+                        <button
+                            onClick={() => { setActiveTab('mint'); setAmount(''); }}
+                            className={`flex-1 py-4 text-center font-semibold transition-colors flex items-center justify-center gap-2 ${activeTab === 'mint'
+                                ? 'text-green-400 border-b-2 border-green-400 bg-green-400/5'
+                                : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                        >
+                            <TrendingUp className="w-5 h-5" />
+                            {t('vault', 'mintTab')} (MON → CLAWDOGE)
+                        </button>
+                        <button
+                            onClick={() => { setActiveTab('redeem'); setAmount(''); }}
+                            className={`flex-1 py-4 text-center font-semibold transition-colors flex items-center justify-center gap-2 ${activeTab === 'redeem'
+                                ? 'text-blue-400 border-b-2 border-blue-400 bg-blue-400/5'
+                                : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                        >
+                            <TrendingDown className="w-5 h-5" />
+                            {t('vault', 'redeemTab')} (CLAWDOGE → MON)
+                        </button>
+                    </div>
+
+                    <div className="p-6">
+                        {/* Input */}
+                        <div className="mb-4">
+                            <label className="text-sm text-zinc-400 mb-2 block">
+                                {activeTab === 'mint' ? t('vault', 'youPay') + ' (MON)' : t('vault', 'youBurn') + ' (CLAWDOGE)'}
+                            </label>
+                            <input
+                                type="number"
+                                value={amount}
+                                onChange={(e) => setAmount(e.target.value)}
+                                placeholder="0.0"
+                                className="w-full px-4 py-4 bg-zinc-800 border border-zinc-700 rounded-xl text-white text-xl
+                                           placeholder-zinc-600 focus:outline-none focus:border-orange-500/50 transition-colors"
+                            />
+                        </div>
+
+                        {/* Output Preview */}
+                        {amount && (
+                            <div className="mb-6 p-4 bg-zinc-800/50 rounded-xl">
+                                <p className="text-sm text-zinc-500 mb-1">
+                                    {activeTab === 'mint' ? t('vault', 'youGet') : t('vault', 'youReceive')}
+                                </p>
+                                <p className="text-2xl font-bold text-white">
+                                    {activeTab === 'mint'
+                                        ? `${formatNum(mintOutput as bigint | undefined)} CLAWDOGE`
+                                        : `${formatNum(redeemOutput as bigint | undefined)} MON`
+                                    }
+                                </p>
+                                {activeTab === 'redeem' && (
+                                    <p className="text-xs text-zinc-500 mt-1">{t('vault', 'redeemTab')} -11.1%</p>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Action Button */}
+                        {!isConnected ? (
+                            <p className="text-center text-yellow-400 py-4">⚠️ {t('vault', 'connectFirst')}</p>
+                        ) : (
+                            <button
+                                onClick={activeTab === 'mint' ? handleMint : handleRedeem}
+                                disabled={!amount || loading}
+                                className={`w-full py-4 font-bold rounded-xl transition-all flex items-center justify-center gap-2
+                                    ${activeTab === 'mint'
+                                        ? 'bg-gradient-to-r from-green-500 to-emerald-500 hover:opacity-90'
+                                        : 'bg-gradient-to-r from-blue-500 to-cyan-500 hover:opacity-90'
+                                    } text-white disabled:opacity-50 disabled:cursor-not-allowed`}
+                            >
+                                {loading ? (
+                                    <>
+                                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                        </svg>
+                                        <span>{statusText || t('common', 'processing')}</span>
+                                    </>
+                                ) : needsApproval ? (
+                                    <span>{t('vault', 'approveClawdoge')}</span>
+                                ) : (
+                                    <span>{activeTab === 'mint' ? t('vault', 'mintClawdoge') : t('vault', 'redeemToMon')}</span>
+                                )}
+                            </button>
+                        )}
+
+                        {/* Success Message */}
+                        {(isMintSuccess || isRedeemSuccess) && (
+                            <div className="mt-4 p-3 bg-green-500/10 border border-green-500/20 rounded-xl">
+                                <p className="text-sm text-green-400">{t('common', 'txSuccess')}</p>
+                            </div>
+                        )}
+
+                        {/* Tax Info */}
+                        <div className="mt-4 p-3 bg-zinc-800/50 rounded-xl flex items-start gap-2">
+                            <Info className="w-4 h-4 text-zinc-500 mt-0.5 flex-shrink-0" />
+                            <p className="text-xs text-zinc-500">{t('vault', 'taxNote')}</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Max Supply Progress */}
+                <div className="mt-8 p-6 bg-zinc-900/50 border border-zinc-800 rounded-2xl">
+                    <h3 className="text-lg font-semibold text-white mb-4">{t('home', 'maxSupply')}</h3>
+                    <div className="w-full h-4 bg-zinc-800 rounded-full overflow-hidden mb-2">
+                        <div
+                            className="h-full bg-gradient-to-r from-orange-500 to-yellow-500 rounded-full transition-all"
+                            style={{
+                                width: `${circulatingSupply && maxSupply
+                                    ? (Number(circulatingSupply) / Number(maxSupply) * 100)
+                                    : 0}%`
+                            }}
+                        />
+                    </div>
+                    <div className="flex justify-between text-sm text-zinc-500">
+                        <span>{t('vault', 'circulatingSupply')}: {formatNum(circulatingSupply)}</span>
+                        <span>Max: {formatNum(maxSupply)}</span>
                     </div>
                 </div>
             </div>
