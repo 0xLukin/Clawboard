@@ -11,7 +11,8 @@ export default defineConfig({
             'https://www.moltbook.com/*',
             'https://moltbook.com/*',
             'http://localhost:3000/*',
-            'https://clawboard.xyz/*'
+            'https://clawboard.xyz/*',
+            'https://clawboard-mon.vercel.app/*'
         ],
     },
 });

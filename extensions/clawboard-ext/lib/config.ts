@@ -1,7 +1,7 @@
 // Clawboard Configuration
 export const CONFIG = {
     // Clawboard Main Site
-    MAIN_SITE_URL: 'http://localhost:3000',
+    MAIN_SITE_URL: 'https://clawboard-mon.vercel.app',
 
     // Monad Testnet
     CHAIN_ID: 10143,

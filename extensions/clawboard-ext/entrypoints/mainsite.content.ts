@@ -11,7 +11,7 @@ interface WalletSyncData {
 }
 
 export default defineContentScript({
-    matches: ['http://localhost:3000/*', 'https://clawboard.xyz/*'],
+    matches: ['http://localhost:3000/*', 'https://clawboard.xyz/*', 'https://clawboard-mon.vercel.app/*'],
     runAt: 'document_idle',
 
     async main() {

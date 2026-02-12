@@ -5,7 +5,7 @@ import { t, Locale } from '../../lib/i18n';
 const app = document.getElementById('app')!;
 
 const CONFIG = {
-  MAIN_SITE_URL: 'http://localhost:3000',
+  MAIN_SITE_URL: 'https://clawboard-mon.vercel.app',
 };
 
 interface WalletData {
